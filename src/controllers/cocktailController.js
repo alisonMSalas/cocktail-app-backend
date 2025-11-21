@@ -6,7 +6,7 @@ const path = require("path");
 const getAllCocktails = async (req, res) => {
     try {
         const { search, category, ingredient } = req.query;
-        
+
         const cocktailRepository = AppDataSource.getRepository("Cocktail");
         let query = cocktailRepository.createQueryBuilder("cocktail")
             .leftJoinAndSelect("cocktail.category", "category")
@@ -15,31 +15,31 @@ const getAllCocktails = async (req, res) => {
 
         // Filtro por búsqueda de nombre
         if (search) {
-            query = query.andWhere("cocktail.name ILIKE :search", { 
-                search: `%${search}%` 
+            query = query.andWhere("cocktail.name ILIKE :search", {
+                search: `%${search}%`
             });
         }
 
         // Filtro por categoría
         if (category) {
-            query = query.andWhere("cocktail.category_id = :category", { 
-                category: parseInt(category) 
+            query = query.andWhere("cocktail.category_id = :category", {
+                category: parseInt(category)
             });
         }
 
         // Filtro por ingrediente
         if (ingredient) {
-            query = query.andWhere("ingredient.id = :ingredient", { 
-                ingredient: parseInt(ingredient) 
+            query = query.andWhere("ingredient.id = :ingredient", {
+                ingredient: parseInt(ingredient)
             });
         }
 
         const cocktails = await query.getMany();
         res.json(cocktails);
     } catch (error) {
-        res.status(500).json({ 
-            message: "Error al obtener cócteles", 
-            error: error.message 
+        res.status(500).json({
+            message: "Error al obtener cócteles",
+            error: error.message
         });
     }
 };
@@ -50,10 +50,13 @@ const getCocktailById = async (req, res) => {
         const { id } = req.params;
         
         const cocktailRepository = AppDataSource.getRepository("Cocktail");
-        const cocktail = await cocktailRepository.findOne({
-            where: { id: parseInt(id) },
-            relations: ["category", "cocktailIngredients", "cocktailIngredients.ingredient"],
-        });
+        const cocktail = await cocktailRepository
+            .createQueryBuilder("cocktail")
+            .leftJoinAndSelect("cocktail.category", "category")
+            .leftJoinAndSelect("cocktail.cocktailIngredients", "ci")
+            .leftJoinAndSelect("ci.ingredient", "ingredient")
+            .where("cocktail.id = :id", { id: parseInt(id) })
+            .getOne();
 
         if (!cocktail) {
             return res.status(404).json({ message: "Cóctel no encontrado" });
@@ -67,11 +70,14 @@ const getCocktailById = async (req, res) => {
         });
     }
 };
-
 // Crear un nuevo cóctel
 const createCocktail = async (req, res) => {
     try {
         const { name, description, instructions, category_id, ingredients } = req.body;
+
+        console.log('=== DEBUG INGREDIENTES ===');
+        console.log('Ingredients raw:', ingredients);
+        console.log('Tipo:', typeof ingredients);
 
         // Validaciones
         if (!name || !instructions) {
@@ -93,39 +99,71 @@ const createCocktail = async (req, res) => {
         });
 
         const savedCocktail = await cocktailRepository.save(cocktail);
+        console.log('Cóctel guardado con ID:', savedCocktail.id);
 
-        // Agregar ingredientes si se proporcionan
-        if (ingredients && Array.isArray(ingredients)) {
-            for (const ing of ingredients) {
+        // Parsear ingredientes
+        let ingredientsData = [];
+        if (ingredients) {
+            try {
+                ingredientsData = typeof ingredients === 'string' 
+                    ? JSON.parse(ingredients) 
+                    : ingredients;
+                console.log('Ingredientes parseados:', ingredientsData);
+            } catch (e) {
+                console.error('Error parseando ingredientes:', e);
+            }
+        }
+
+        // Agregar ingredientes
+        if (ingredientsData && Array.isArray(ingredientsData) && ingredientsData.length > 0) {
+            console.log('Intentando guardar', ingredientsData.length, 'ingredientes');
+            
+            for (const ing of ingredientsData) {
+                console.log('Guardando ingrediente:', ing);
+                
                 const cocktailIngredient = cocktailIngredientRepository.create({
                     cocktail: { id: savedCocktail.id },
                     ingredient: { id: parseInt(ing.ingredient_id) },
                     quantity: ing.quantity,
                 });
-                await cocktailIngredientRepository.save(cocktailIngredient);
+                
+                console.log('Entidad creada:', cocktailIngredient);
+                
+                const saved = await cocktailIngredientRepository.save(cocktailIngredient);
+                console.log('Ingrediente guardado:', saved);
             }
+        } else {
+            console.log('No hay ingredientes válidos para guardar');
         }
 
-        // Obtener el cóctel completo con relaciones
-        const result = await cocktailRepository.findOne({
-            where: { id: savedCocktail.id },
-            relations: ["category", "cocktailIngredients", "cocktailIngredients.ingredient"],
-        });
+        // Obtener el cóctel completo
+        const result = await cocktailRepository
+            .createQueryBuilder("cocktail")
+            .leftJoinAndSelect("cocktail.category", "category")
+            .leftJoinAndSelect("cocktail.cocktailIngredients", "ci")
+            .leftJoinAndSelect("ci.ingredient", "ingredient")
+            .where("cocktail.id = :id", { id: savedCocktail.id })
+            .getOne();
+
+        console.log('Resultado final:', JSON.stringify(result, null, 2));
 
         res.status(201).json(result);
     } catch (error) {
+        console.error('Error completo:', error);
         res.status(500).json({ 
             message: "Error al crear el cóctel", 
             error: error.message 
         });
     }
 };
-
 // Actualizar un cóctel
 const updateCocktail = async (req, res) => {
     try {
         const { id } = req.params;
         const { name, description, instructions, category_id, ingredients } = req.body;
+
+        console.log('=== DEBUG UPDATE INGREDIENTES ===');
+        console.log('Ingredients raw:', ingredients);
 
         const cocktailRepository = AppDataSource.getRepository("Cocktail");
         const cocktailIngredientRepository = AppDataSource.getRepository("CocktailIngredient");
@@ -147,7 +185,7 @@ const updateCocktail = async (req, res) => {
             }
         }
 
-        // Actualizar cocktail
+        // Actualizar campos
         cocktail.name = name || cocktail.name;
         cocktail.description = description !== undefined ? description : cocktail.description;
         cocktail.instructions = instructions || cocktail.instructions;
@@ -159,30 +197,54 @@ const updateCocktail = async (req, res) => {
 
         await cocktailRepository.save(cocktail);
 
+        // Parsear ingredientes
+        let ingredientsData = [];
+        if (ingredients) {
+            try {
+                ingredientsData = typeof ingredients === 'string' 
+                    ? JSON.parse(ingredients) 
+                    : ingredients;
+                console.log('Ingredientes parseados:', ingredientsData);
+            } catch (e) {
+                console.error('Error parseando ingredientes:', e);
+            }
+        }
+
         // Actualizar ingredientes si se proporcionan
-        if (ingredients && Array.isArray(ingredients)) {
+        if (ingredientsData && Array.isArray(ingredientsData)) {
             // Eliminar ingredientes anteriores
             await cocktailIngredientRepository.delete({ cocktail: { id: parseInt(id) } });
+            console.log('Ingredientes anteriores eliminados');
 
             // Agregar nuevos ingredientes
-            for (const ing of ingredients) {
-                const cocktailIngredient = cocktailIngredientRepository.create({
-                    cocktail: { id: parseInt(id) },
-                    ingredient: { id: parseInt(ing.ingredient_id) },
-                    quantity: ing.quantity,
-                });
-                await cocktailIngredientRepository.save(cocktailIngredient);
+            if (ingredientsData.length > 0) {
+                console.log('Guardando', ingredientsData.length, 'nuevos ingredientes');
+                
+                for (const ing of ingredientsData) {
+                    const cocktailIngredient = cocktailIngredientRepository.create({
+                        cocktail: { id: parseInt(id) },
+                        ingredient: { id: parseInt(ing.ingredient_id) },
+                        quantity: ing.quantity,
+                    });
+                    await cocktailIngredientRepository.save(cocktailIngredient);
+                }
             }
         }
 
         // Obtener el cóctel actualizado con relaciones
-        const result = await cocktailRepository.findOne({
-            where: { id: parseInt(id) },
-            relations: ["category", "cocktailIngredients", "cocktailIngredients.ingredient"],
-        });
+        const result = await cocktailRepository
+            .createQueryBuilder("cocktail")
+            .leftJoinAndSelect("cocktail.category", "category")
+            .leftJoinAndSelect("cocktail.cocktailIngredients", "ci")
+            .leftJoinAndSelect("ci.ingredient", "ingredient")
+            .where("cocktail.id = :id", { id: parseInt(id) })
+            .getOne();
+
+        console.log('Cóctel actualizado:', JSON.stringify(result, null, 2));
 
         res.json(result);
     } catch (error) {
+        console.error('Error al actualizar:', error);
         res.status(500).json({ 
             message: "Error al actualizar el cóctel", 
             error: error.message 
@@ -216,9 +278,9 @@ const deleteCocktail = async (req, res) => {
 
         res.json({ message: "Cóctel eliminado exitosamente" });
     } catch (error) {
-        res.status(500).json({ 
-            message: "Error al eliminar el cóctel", 
-            error: error.message 
+        res.status(500).json({
+            message: "Error al eliminar el cóctel",
+            error: error.message
         });
     }
 };
