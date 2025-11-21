@@ -3,11 +3,10 @@
   "version": "1.0.0",
   "description": "API REST para gestión de cócteles con Node.js y TypeORM",
   "main": "src/server.js",
-  "scripts": {
-    "dev": "nodemon src/server.js",
-    "start": "node src/server.js",
-    "seed": "node src/seeders/seed.js"
-  },
+ "scripts": {
+  "dev": "nodemon src/server.js",
+  "start": "node src/server.js"
+},
   "keywords": ["cocktails", "api", "nodejs", "typeorm"],
   "author": "",
   "license": "ISC",
